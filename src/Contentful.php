@@ -16,6 +16,7 @@ use Markup\Contentful\Exception\LinkUnresolvableException;
 use Markup\Contentful\Exception\ResourceUnavailableException;
 use Markup\Contentful\Filter\ContentTypeFilterProvider;
 use Markup\Contentful\Filter\ContentTypeNameFilter;
+use Markup\Contentful\Filter\LocaleFilter;
 use Markup\Contentful\Log\LoggerInterface;
 use Markup\Contentful\Log\LogInterface;
 use Markup\Contentful\Log\NullLogger;
@@ -286,14 +287,19 @@ class Contentful
     }
 
     /**
-     * @param Link $link
+     * @param Link   $link
+     * @param string $locale
      * @return ResourceInterface
      */
-    public function resolveLink($link, array $options = [])
+    public function resolveLink($link, $locale = null)
     {
         //check whether the "link" is already actually a resolved resource
         if ($link instanceof ResourceInterface) {
             return $link;
+        }
+        $options = [];
+        if ($locale) {
+            $options['locale'] = $locale;
         }
         try {
             switch ($link->getLinkType()) {
@@ -359,7 +365,7 @@ class Contentful
             if (is_string($cacheItemJson) && strlen($cacheItemJson) > 0) {
                 $this->logger->log(sprintf('Fetched response from cache for key "%s".', $cacheKey), true, $timer, LogInterface::TYPE_RESPONSE, $this->getLogResourceTypeForQueryType($queryType), $api);
 
-                return $this->buildResponseFromRaw(json_decode($cacheItemJson, $assoc = true));
+                return $this->buildResponseFromRaw(json_decode($cacheItemJson, $assoc = true), null, $this->pluckLocaleFromParameters($parameters));
             }
         }
         $request = $this->guzzle->createRequest('GET', $endpointUrl);
@@ -396,7 +402,7 @@ class Contentful
                     $cacheItem->set($fallbackJson);
                     $cache->save($cacheItem);
 
-                    return $this->buildResponseFromRaw(json_decode($fallbackJson, $assoc = true));
+                    return $this->buildResponseFromRaw(json_decode($fallbackJson, $assoc = true), null, $this->pluckLocaleFromParameters($parameters));
                 }
             }
             //if there is a rate limit error, wait (if applicable)
@@ -432,7 +438,22 @@ class Contentful
 
         $assetDecorator = $this->ensureAssetDecorator($spaceData['asset_decorator']);
 
-        return $this->buildResponseFromRaw($response->json(), $assetDecorator);
+        return $this->buildResponseFromRaw($response->json(), $assetDecorator, $this->pluckLocaleFromParameters($parameters));
+    }
+
+    /**
+     * @param ParameterInterface[] $parameters
+     * @return string|null
+     */
+    private function pluckLocaleFromParameters(array $parameters)
+    {
+        foreach ($parameters as $parameter) {
+            if  ($parameter instanceof LocaleFilter) {
+                return $parameter->getValue();
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -523,13 +544,13 @@ class Contentful
      * @param AssetDecoratorInterface $assetDecorator
      * @return ResourceInterface
      */
-    private function buildResponseFromRaw(array $data, AssetDecoratorInterface $assetDecorator = null)
+    private function buildResponseFromRaw(array $data, AssetDecoratorInterface $assetDecorator = null, $locale = null)
     {
         static $resourceBuilder;
         if (empty($resourceBuilder)) {
             $resourceBuilder = new ResourceBuilder($this->envelope);
-            $resourceBuilder->setResolveLinkFunction(function ($link) {
-                return $this->resolveLink($link);
+            $resourceBuilder->setResolveLinkFunction(function ($link) use ($locale) {
+                return $this->resolveLink($link, $locale);
             });
             $resourceBuilder->setUseDynamicEntries($this->useDynamicEntries);
         }
